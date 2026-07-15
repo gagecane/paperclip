@@ -62,6 +62,7 @@ vi.mock("../api/execution-workspaces", () => ({
 vi.mock("../api/issues", () => ({
   issuesApi: {
     list: apiMocks.issuesList,
+    listCompact: apiMocks.issuesList,
     count: apiMocks.issuesCount,
     listLabels: apiMocks.issueLabels,
     markRead: vi.fn(),
@@ -376,6 +377,11 @@ describe("Inbox toolbar", () => {
       true,
       true,
     ]);
+    expect(apiMocks.issuesList.mock.calls.map((call) => call[1]?.limit)).toEqual([
+      500,
+      500,
+      500,
+    ]);
 
     act(() => {
       root.unmount();
@@ -426,6 +432,68 @@ describe("Inbox toolbar", () => {
     expect(linkOf(rows[0]!)?.className).toContain("hover:bg-accent/50");
     expect(linkOf(rows[1]!)?.className).toContain("hover:bg-accent/50");
     expect(linkOf(rows[1]!)?.className).not.toContain("hover:bg-transparent");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("does not double-indent unread rows: the mark-read dot replaces the leading spacer", async () => {
+    routerMock.location.pathname = "/inbox/mine";
+    // Two sibling leaf rows, one unread and one read, so their leading columns
+    // are directly comparable.
+    const unread = createIssue({
+      id: "issue-unread",
+      identifier: "PAP-2001",
+      title: "Unread inbox row",
+      isUnreadForMe: true,
+    });
+    const read = createIssue({
+      id: "issue-read",
+      identifier: "PAP-2002",
+      title: "Read inbox row",
+      isUnreadForMe: false,
+    });
+    apiMocks.issuesList.mockResolvedValue([unread, read]);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
+    });
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Inbox />
+        </QueryClientProvider>,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Unread inbox row");
+      expect(container.textContent).toContain("Read inbox row");
+    });
+
+    const rows = Array.from(container.querySelectorAll("[data-inbox-item]"));
+    const rowFor = (text: string) => rows.find((row) => row.textContent?.includes(text));
+    const linkOf = (row: Element) => row.querySelector<HTMLAnchorElement>("a[data-inbox-issue-link]");
+    const hasMarkReadDot = (row: Element) => !!row.querySelector('button[aria-label="Mark as read"]');
+    // The empty spacer that reserves the chevron column on read rows. Excludes
+    // the tree-guide span (`.self-stretch`), which only renders on nested rows.
+    const hasLeadingSpacer = (row: Element) =>
+      !!linkOf(row)?.querySelector("span.hidden.w-4.shrink-0.sm\\:block:not(.self-stretch)");
+
+    const unreadRow = rowFor("Unread inbox row")!;
+    const readRow = rowFor("Read inbox row")!;
+
+    // Unread rows carry the mark-read dot in the chevron column; rendering the
+    // spacer too would push the status icon + title one column further right
+    // than read rows (the bug this fix addresses).
+    expect(hasMarkReadDot(unreadRow)).toBe(true);
+    expect(hasLeadingSpacer(unreadRow)).toBe(false);
+
+    // Read rows have no dot, so they keep the spacer to hold that same column.
+    expect(hasMarkReadDot(readRow)).toBe(false);
+    expect(hasLeadingSpacer(readRow)).toBe(true);
 
     act(() => {
       root.unmount();

@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { CompanySkillDetail, CompanySkillVersion } from "@paperclipai/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscoveryGrid, SkillDetailPage, getSkillVersionDiffSelection } from "./CompanySkills";
+import { skillStudioNewRoute } from "../lib/company-skill-routes";
 
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
@@ -327,6 +328,12 @@ describe("DiscoveryGrid Studio entry points", () => {
   });
 });
 
+describe("skillStudioNewRoute", () => {
+  it("builds a direct fork draft URL for a specific skill", () => {
+    expect(skillStudioNewRoute("skill 1")).toBe("/skills/studio/new?forkFrom=skill%201");
+  });
+});
+
 describe("SkillDetailPage versions tab", () => {
   it("opens per-row version diffs for newest and oldest revisions", async () => {
     const v1 = makeVersion(1, "# Demo Skill\n\nFirst line");
@@ -358,7 +365,52 @@ describe("SkillDetailPage versions tab", () => {
 });
 
 describe("SkillDetailPage settings", () => {
-  it("saves category edits with spaces from the settings dialog", async () => {
+  it("shows a direct fork action for read-only skills", async () => {
+    const v1 = makeVersion(1, "# Demo Skill");
+    const onFork = vi.fn();
+    const node = await renderSkillDetail([v1], {
+      activeTab: "overview",
+      detail: makeDetail(v1, {
+        editable: false,
+        editableReason: "Remote GitHub skills are read-only. Fork or import locally to edit them.",
+        sourceBadge: "github",
+        sourceLabel: "GitHub",
+        sourceType: "github",
+      }),
+      onFork,
+    });
+
+    expect(node.textContent).not.toContain("Fork or import locally");
+
+    const forkButton = buttonsNamed(node, "Fork")[0] as HTMLButtonElement;
+    expect(forkButton).toBeTruthy();
+
+    await click(forkButton);
+
+    expect(onFork).toHaveBeenCalledOnce();
+  });
+
+  it("renders long source paths in full so they can wrap inside the sidebar", async () => {
+    const v1 = makeVersion(1, "# Demo Skill");
+    const longSourcePath = "/srv/paperclip/home/paperclipai/paperclip/.agents/skills/prepare-pr/SKILL.md";
+    const node = await renderSkillDetail([v1], {
+      activeTab: "agents",
+      detail: makeDetail(v1, {
+        sourcePath: longSourcePath,
+        sourceLocator: null,
+      }),
+    });
+
+    const sourceValue = Array.from(node.querySelectorAll("div")).find((element) =>
+      element.textContent === longSourcePath,
+    );
+
+    expect(sourceValue).toBeTruthy();
+    expect(sourceValue?.className).toContain("[overflow-wrap:anywhere]");
+    expect(node.textContent).not.toContain("...");
+  });
+
+  it("saves normalized category edits from the settings dialog", async () => {
     const v1 = makeVersion(1, "# Demo Skill");
     const onUpdateSettings = vi.fn();
     const node = await renderSkillDetail([v1], {

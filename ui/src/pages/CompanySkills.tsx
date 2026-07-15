@@ -8,6 +8,7 @@ import type {
   CatalogSkillFileDetail,
   CatalogSkillSource,
   CompanySkillCompatibility,
+  CompanySkillCreateRequest,
   CompanySkillDetail,
   CompanySkillFileDetail,
   CompanySkillFileInventoryEntry,
@@ -33,7 +34,12 @@ import { PageSkeleton } from "../components/PageSkeleton";
 import { CopyText } from "../components/CopyText";
 import { Identity } from "../components/Identity";
 import { AgentIcon } from "../components/AgentIconPicker";
+import { AgentMultiSelect } from "../components/AgentMultiSelect";
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
+import {
+  SkillPolicyDenialNotice,
+  useSkillPolicyDenial,
+} from "@/components/skill-studio/SkillPolicySurfaces";
 import {
   Dialog,
   DialogContent,
@@ -53,11 +59,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { buildLineDiff, type DiffRow } from "../lib/line-diff";
@@ -73,8 +74,15 @@ import {
   type CompanySkillRouteSubject,
 } from "../lib/company-skill-routes";
 import {
+  SKILL_CREATE_ACCENTS,
+  buildBlankSkillDraft,
+  buildForkSkillDraft,
+  defaultSkillMarkdown,
   normalizeSkillDraftSlug,
+  skillAccentColor,
+  skillCreateDraftToPayload,
   splitCategoryDraft,
+  type SkillCreateDraft,
 } from "../lib/skill-create";
 import { SkillCardIcon } from "../components/SkillCardIcon";
 import { Button } from "@/components/ui/button";
@@ -1151,6 +1159,241 @@ export function DiscoveryGrid({
   );
 }
 
+function NewSkillWizard({
+  initialDraft,
+  onCreate,
+  isPending,
+  error,
+  onCancel,
+}: {
+  initialDraft: SkillCreateDraft;
+  onCreate: (payload: CompanySkillCreateRequest) => void;
+  isPending: boolean;
+  error: string | null;
+  onCancel: () => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState<SkillCreateDraft>(initialDraft);
+  const [slugDirty, setSlugDirty] = useState(initialDraft.slug.trim().length > 0);
+  const categoryDraft = draft.categories.join(", ");
+  const steps = ["Basics", "Design", "Content", "Review"];
+
+  useEffect(() => {
+    setStep(0);
+    setDraft(initialDraft);
+    setSlugDirty(initialDraft.slug.trim().length > 0);
+  }, [initialDraft]);
+
+  function patchDraft(patch: Partial<SkillCreateDraft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+  }
+
+  const nameValid = draft.name.trim().length > 0;
+  const effectiveSlug = draft.slug.trim() || normalizeSkillDraftSlug(draft.name);
+  function submit() {
+    onCreate(skillCreateDraftToPayload(draft));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 border-b border-border pb-3">
+        {steps.map((label, index) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => setStep(index)}
+            className={cn(
+              "rounded-md px-2 py-1 text-xs",
+              step === index ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {draft.forkedFromName ? (
+        <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <GitFork className="h-3.5 w-3.5" />
+          Forking {draft.forkedFromName}
+        </div>
+      ) : null}
+
+      {step === 0 ? (
+        <div className="space-y-3">
+          <Input
+            value={draft.name}
+            onChange={(event) => {
+              const nextName = event.target.value;
+              patchDraft({
+                name: nextName,
+                slug: slugDirty ? draft.slug : normalizeSkillDraftSlug(nextName),
+                markdown: draft.markdown === defaultSkillMarkdown(draft.name, draft.tagline)
+                  ? defaultSkillMarkdown(nextName, draft.tagline)
+                  : draft.markdown,
+              });
+            }}
+            placeholder="Skill name"
+            className="h-9"
+          />
+          <Input
+            value={draft.slug}
+            onChange={(event) => {
+              const nextSlug = normalizeSkillDraftSlug(event.target.value);
+              setSlugDirty(nextSlug.length > 0);
+              patchDraft({ slug: nextSlug });
+            }}
+            placeholder="skill-shortname"
+            className="h-9 font-mono"
+          />
+          <Textarea
+            value={draft.tagline}
+            onChange={(event) => {
+              const nextTagline = event.target.value;
+              patchDraft({
+                tagline: nextTagline,
+                description: draft.description ? draft.description : nextTagline,
+                markdown: draft.markdown === defaultSkillMarkdown(draft.name, draft.tagline)
+                  ? defaultSkillMarkdown(draft.name, nextTagline)
+                  : draft.markdown,
+              });
+            }}
+            placeholder="One-line promise for the skill"
+            className="min-h-20"
+          />
+        </div>
+      ) : step === 1 ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <SkillCardIcon
+              size={48}
+              card={{
+                key: effectiveSlug || draft.name || "new-skill",
+                name: draft.name || "New Skill",
+                slug: effectiveSlug || "skill",
+                iconUrl: null,
+                color: draft.color,
+              }}
+            />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{draft.name || "New Skill"}</div>
+              <div className="truncate text-xs text-muted-foreground">{draft.tagline || "No tagline yet."}</div>
+            </div>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Color</label>
+            <div className="flex flex-wrap gap-2">
+              {SKILL_CREATE_ACCENTS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => patchDraft({ color })}
+                  className={cn(
+                    "h-7 w-7 rounded-md border",
+                    draft.color === color ? "border-foreground" : "border-border",
+                  )}
+                  style={{ backgroundColor: color }}
+                  aria-label={`Use ${color}`}
+                />
+              ))}
+              <Input
+                value={draft.color}
+                onChange={(event) => patchDraft({ color: event.target.value })}
+                className="h-7 w-28 font-mono text-xs"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Categories</label>
+            <Input
+              value={categoryDraft}
+              onChange={(event) => patchDraft({ categories: splitCategoryDraft(event.target.value) })}
+              placeholder="engineering, review, memory"
+              className="h-9"
+            />
+          </div>
+        </div>
+      ) : step === 2 ? (
+        <div className="space-y-2">
+          <Textarea
+            value={draft.markdown}
+            onChange={(event) => patchDraft({ markdown: event.target.value })}
+            className="h-(--sz-calc-34) resize-y font-mono text-xs"
+          />
+        </div>
+      ) : (
+        <div className="space-y-4 text-sm">
+          <div className="grid grid-cols-(--gtc-26) gap-y-2">
+            <span className="text-muted-foreground">Name</span>
+            <span>{draft.name || "Untitled"}</span>
+            <span className="text-muted-foreground">Slug</span>
+            <span className="font-mono">{effectiveSlug || "skill"}</span>
+            <span className="text-muted-foreground">Scope</span>
+            <span>{draft.sharingScope === "private" ? "Private" : "Company"}</span>
+            <span className="text-muted-foreground">Categories</span>
+            <span>{draft.categories.length ? draft.categories.join(", ") : "none"}</span>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Sharing</label>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {(["company", "private"] as const).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => patchDraft({ sharingScope: scope })}
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-left text-sm",
+                    draft.sharingScope === scope ? "border-foreground bg-accent/50" : "border-border",
+                  )}
+                >
+                  <span className="block font-medium">{scope === "company" ? "Company" : "Private"}</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {scope === "company" ? "Visible inside this company." : "Only visible in your library."}
+                  </span>
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled
+                className="rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground"
+              >
+                <span className="block font-medium">Public link</span>
+                <span className="mt-1 block text-xs">Coming later.</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={isPending}>
+          Cancel
+        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={isPending || step === 0}>
+            Back
+          </Button>
+          {step < steps.length - 1 ? (
+            <Button size="sm" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))} disabled={!nameValid}>
+              Next
+            </Button>
+          ) : (
+            <Button size="sm" onClick={submit} disabled={isPending || !nameValid}>
+              {isPending ? "Creating..." : draft.forkedFromSkillId ? "Create fork" : "Create skill"}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CatalogList({
   skills,
   kindFilter,
@@ -1654,140 +1897,61 @@ function AttachAgentsPopover({
   onSubmit: (nextIds: string[], versionId: string | null) => void;
   fullWidth?: boolean;
 }) {
-  // Each popover instance owns its open state. The detail page renders two of
-  // these (agents tab + sidebar); sharing a single controlled flag made both
-  // open at once and swallowed clicks, so "Add to agent" appeared dead (PAP-10907 H).
-  const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [draft, setDraft] = useState<Set<string>>(new Set(attachedAgentIds));
   const [draftVersionId, setDraftVersionId] = useState<string | null>(selectedVersionId);
-
-  useEffect(() => {
-    if (open) {
-      setDraft(new Set(attachedAgentIds));
-      setDraftVersionId(selectedVersionId);
-      setFilter("");
-    }
-  }, [open, attachedAgentIds, selectedVersionId]);
-
-  // Checked agents float to the top of the list (PAP-10907); within each group
-  // we keep a stable alphabetical order.
-  const filtered = agents
-    .filter((agent) => agent.name.toLowerCase().includes(filter.toLowerCase()))
-    .sort((a, b) => {
-      const aChecked = draft.has(a.id);
-      const bChecked = draft.has(b.id);
-      if (aChecked !== bChecked) return aChecked ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  const attachedIds = useMemo(() => new Set(attachedAgentIds), [attachedAgentIds]);
   const eligible = agents.filter((agent) => agent.supportsSkills);
   const sortedVersions = [...versions].sort((a, b) => b.revisionNumber - a.revisionNumber);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button size="sm" className={cn(fullWidth && "w-full")}>
-          <Plus className="mr-1.5 h-3.5 w-3.5" />
-          Add to agent
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-80 p-0" align="end">
-        <div className="border-b border-border px-3 py-2">
-          <Input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter agents"
-            className="h-8"
-          />
-          {sortedVersions.length > 0 ? (
-            <div className="mt-2 flex items-center gap-2 text-xs">
-              <span className="shrink-0 text-muted-foreground">Version</span>
-              <select
-                value={draftVersionId ?? "__latest__"}
-                onChange={(event) => setDraftVersionId(event.target.value === "__latest__" ? null : event.target.value)}
-                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-              >
-                <option value="__latest__">Latest</option>
-                {sortedVersions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    v{version.revisionNumber}{version.label ? ` · ${version.label}` : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-        </div>
-        {eligible.length === 0 ? (
-          <div className="px-3 py-4 text-sm text-muted-foreground">
-            No agents in this company support skills yet.
-          </div>
-        ) : (
-          <div className="max-h-60 overflow-y-auto py-1">
-            {filtered.map((agent) => {
-              const disabled = agent.required || !agent.supportsSkills;
-              const checked = draft.has(agent.id);
-              return (
-                <label
-                  key={agent.id}
-                  className={cn(
-                    "flex items-start gap-2 px-3 py-1.5 text-sm hover:bg-accent/30",
-                    disabled && "opacity-60",
-                  )}
-                >
-                  <Checkbox
-                    checked={checked}
-                    disabled={disabled}
-                    onCheckedChange={(value) => {
-                      setDraft((current) => {
-                        const next = new Set(current);
-                        if (value) next.add(agent.id);
-                        else next.delete(agent.id);
-                        return next;
-                      });
-                    }}
-                  />
-                  <AgentIcon icon={agent.icon} className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="flex items-center gap-1.5">
-                      <span className="truncate">{agent.name}</span>
-                      {agent.paused ? (
-                        <Badge variant="outline" className="[&>svg]:size-2.5 border-amber-500/30 bg-amber-500/10 px-1.5 text-(length:--text-nano) uppercase tracking-wide text-amber-500">
-                          <Pause className="h-2.5 w-2.5" aria-hidden="true" />
-                          Paused
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className="text-(length:--text-nano) uppercase tracking-wide text-muted-foreground">
-                      {agent.adapterType}
-                      {agent.required ? " · required" : ""}
-                      {!agent.supportsSkills ? " · skills not supported" : ""}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
-            {filtered.length === 0 ? (
-              <div className="px-3 py-4 text-sm text-muted-foreground">No matches.</div>
-            ) : null}
-          </div>
-        )}
-        <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2">
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={pending}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => {
-              onSubmit(Array.from(draft), draftVersionId);
-              setOpen(false);
-            }}
-            disabled={pending}
+    <AgentMultiSelect
+      agents={agents}
+      selectedAgentIds={attachedIds}
+      onSave={(nextIds) => onSubmit(Array.from(nextIds), draftVersionId)}
+      pending={pending}
+      triggerLabel="Add to agent"
+      triggerIcon={<Plus className="mr-1.5 h-3.5 w-3.5" />}
+      triggerVariant="default"
+      triggerSize="sm"
+      triggerFullWidth={fullWidth}
+      triggerClassName={cn(fullWidth && "w-full")}
+      contentAlign="end"
+      showSelectionPreview={false}
+      onOpenChange={(open) => {
+        if (open) setDraftVersionId(selectedVersionId);
+      }}
+      headerContent={sortedVersions.length > 0 ? (
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          <span className="shrink-0 text-muted-foreground">Version</span>
+          <select
+            value={draftVersionId ?? "__latest__"}
+            onChange={(event) => setDraftVersionId(event.target.value === "__latest__" ? null : event.target.value)}
+            className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground"
           >
-            {pending ? "Saving…" : "Save"}
-          </Button>
+            <option value="__latest__">Latest</option>
+            {sortedVersions.map((version) => (
+              <option key={version.id} value={version.id}>
+                v{version.revisionNumber}{version.label ? ` · ${version.label}` : ""}
+              </option>
+            ))}
+          </select>
         </div>
-      </PopoverContent>
-    </Popover>
+      ) : null}
+      emptyMessage={eligible.length === 0 ? "No agents in this company support skills yet." : "No agents yet."}
+      isAgentDisabled={(agent) => {
+        const option = agent as AttachAgentOption;
+        return option.required || !option.supportsSkills;
+      }}
+      getDescription={(agent) => {
+        const option = agent as AttachAgentOption;
+        return `${option.adapterType}${option.required ? " · required" : ""}${!option.supportsSkills ? " · skills not supported" : ""}`;
+      }}
+      renderNameSuffix={(agent) => (agent as AttachAgentOption).paused ? (
+        <Badge variant="outline" className="[&>svg]:size-2.5 border-amber-500/30 bg-amber-500/10 px-1.5 text-(length:--text-nano) uppercase tracking-wide text-amber-500">
+          <Pause className="h-2.5 w-2.5" aria-hidden="true" />
+          Paused
+        </Badge>
+      ) : null}
+    />
   );
 }
 
@@ -2345,10 +2509,9 @@ export function SkillDetailPage({
     ? githubSource.url
       ?? `https://${githubSource.hostname}/${githubSource.owner}/${githubSource.repo}/tree/${githubSource.ref}/${githubSource.path}`.replace(/\/$/, "")
     : null;
-  // Fallback for non-catalog skills: the recorded locator/path, middle-truncated
-  // so long file paths stay readable in the narrow sidebar.
+  // Fallback for non-catalog skills: the recorded locator/path wraps inside
+  // the narrow sidebar instead of widening the page.
   const sourceLocatorText = skill.sourcePath || skill.sourceLocator || null;
-  const sourceLocatorDisplay = sourceLocatorText ? middleTruncate(sourceLocatorText, 44) : null;
   const sourceHref =
     skill.homepageUrl
     ?? (sourceLocatorText && /^(https?:\/\/|[\w.-]+\.[a-z]{2,}\/)/i.test(sourceLocatorText)
@@ -2406,6 +2569,17 @@ export function SkillDetailPage({
                     <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
                   </Button>
                 )
+              ) : !skill.editable ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onFork}
+                  title={skill.editableReason ?? "Fork this skill to edit it."}
+                >
+                  <GitFork className="mr-1.5 h-3.5 w-3.5" />
+                  Fork
+                </Button>
               ) : null}
             </div>
           </div>
@@ -2455,7 +2629,7 @@ export function SkillDetailPage({
           </div>
           <div className="min-w-0 border-b border-border py-2">
             <div className="text-xs text-muted-foreground">Source</div>
-            <div className="mt-1 truncate">{skill.sourcePath ?? source.label}</div>
+            <div className="mt-1 min-w-0 [overflow-wrap:anywhere]">{sourceLocatorText ?? source.label}</div>
           </div>
           <div className="min-w-0 border-b border-border py-2">
             <div className="text-xs text-muted-foreground">Version</div>
@@ -2463,7 +2637,19 @@ export function SkillDetailPage({
           </div>
           <div className="min-w-0 border-b border-border py-2">
             <div className="text-xs text-muted-foreground">Mode</div>
-            <div className="mt-1">{skill.editable ? "Editable" : skill.editableReason ?? "Read only"}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              {skill.editable ? (
+                "Editable"
+              ) : (
+                <>
+                  <span>Read only</span>
+                  <Button type="button" variant="outline" size="xs" onClick={onFork}>
+                    <GitFork className="mr-1 h-3 w-3" />
+                    Fork
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         </section>
       </div>
@@ -2788,9 +2974,9 @@ export function SkillDetailPage({
                     target="_blank"
                     rel="noreferrer"
                     title={githubRepoText ?? undefined}
-                    className="mt-0.5 flex max-w-full items-center gap-1 text-xs text-muted-foreground no-underline transition-colors hover:text-foreground"
+                    className="mt-0.5 flex max-w-full items-start gap-1 text-xs text-muted-foreground no-underline transition-colors [overflow-wrap:anywhere] hover:text-foreground"
                   >
-                    <span className="truncate">{githubRepoText}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{githubRepoText}</span>
                     <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
                   </a>
                   <div className="mt-0.5 truncate font-mono text-(length:--text-micro) text-muted-foreground" title={githubSource.commit}>
@@ -2804,21 +2990,21 @@ export function SkillDetailPage({
                 <SourceIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <div className="min-w-0">
                   <div className="text-foreground">{source.label}</div>
-                  {sourceLocatorDisplay ? (
+                  {sourceLocatorText ? (
                     sourceHref ? (
                       <a
                         href={sourceHref}
                         target="_blank"
                         rel="noreferrer"
                         title={sourceLocatorText ?? undefined}
-                        className="mt-0.5 flex max-w-full items-center gap-1 text-xs text-muted-foreground no-underline transition-colors hover:text-foreground"
+                        className="mt-0.5 flex max-w-full items-start gap-1 text-xs text-muted-foreground no-underline transition-colors [overflow-wrap:anywhere] hover:text-foreground"
                       >
-                        <span className="truncate">{sourceLocatorDisplay}</span>
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{sourceLocatorText}</span>
                         <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
                       </a>
                     ) : (
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground" title={sourceLocatorText ?? undefined}>
-                        {sourceLocatorDisplay}
+                      <div className="mt-0.5 min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]" title={sourceLocatorText ?? undefined}>
+                        {sourceLocatorText}
                       </div>
                     )
                   ) : (
@@ -3309,6 +3495,19 @@ export function CompanySkills() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
   const adapterCaps = useAdapterCapabilities();
+  const policyDenial = useSkillPolicyDenial();
+  // Route a failed skill mutation to the persistent policy banner when it is an
+  // explicit-policy (State B) or platform-safety (State C) denial; otherwise keep
+  // the existing transient error toast. This is the core "actionable denial only
+  // for real restrictions" behavior from §9.10 (PAP-13865).
+  const reportSkillError = (error: unknown, title: string, fallbackBody: string, actionLabel?: string) => {
+    if (policyDenial.capture(error, actionLabel)) return;
+    pushToast({
+      tone: "error",
+      title,
+      body: error instanceof Error && error.message ? error.message : fallbackBody,
+    });
+  };
   const [skillFilter, setSkillFilter] = useState("");
   const [source, setSource] = useState("");
   const [emptySourceHelpOpen, setEmptySourceHelpOpen] = useState(false);
@@ -3340,9 +3539,11 @@ export function CompanySkills() {
   }>({ open: false, catalogSkill: null, conflict: null, defaultSlug: null, defaultForce: false, defaultAction: "install", error: null });
   const [discoverySearch, setDiscoverySearch] = useState("");
   const [discoverySort, setDiscoverySort] = useState<DiscoverySort>("agents");
+  const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
-  const routeSkillToken = parsedRoute.skillToken;
+  const isStudioNew = routePath === "studio/new";
+  const routeSkillToken = isStudioNew ? null : parsedRoute.skillToken;
   const selectedPath = parsedRoute.filePath;
   const viewParam = searchParams.get("view");
   const activeView: "installed" | "catalog" = viewParam === "catalog" ? "catalog" : "installed";
@@ -3361,9 +3562,10 @@ export function CompanySkills() {
       ? "files"
       : "overview";
   const discoveryCategory = searchParams.get("category");
+  const studioForkFromId = isStudioNew ? searchParams.get("forkFrom")?.trim() || null : null;
   // Discovery grid owns `/skills` whenever no specific skill or catalog entry is
   // selected; selecting either drops into the existing master/detail surfaces.
-  const isDiscovery = !routeSkillToken && !selectedCatalogRef;
+  const isDiscovery = !isStudioNew && !routeSkillToken && !selectedCatalogRef;
 
   function setDiscoveryTab(tab: DiscoveryTab) {
     setSearchParams((current) => {
@@ -3413,11 +3615,16 @@ export function CompanySkills() {
   }
 
   useEffect(() => {
+    if (!isStudioNew) return;
+    setCreateError(null);
+  }, [isStudioNew, studioForkFromId]);
+
+  useEffect(() => {
     setBreadcrumbs([
       { label: "Skills", href: "/skills" },
-      ...(routeSkillToken ? [{ label: "Detail" }] : []),
+      ...(isStudioNew ? [{ label: studioForkFromId ? "Fork skill" : "New skill" }] : routeSkillToken ? [{ label: "Detail" }] : []),
     ]);
-  }, [routeSkillToken, setBreadcrumbs]);
+  }, [isStudioNew, routeSkillToken, setBreadcrumbs, studioForkFromId]);
 
   // The old split catalog view no longer exists — catalog/bundled skills now open
   // as a regular full page keyed by `?catalog=<ref>`. Strip the legacy `view`
@@ -3467,6 +3674,20 @@ export function CompanySkills() {
     queryFn: () => companySkillsApi.versions(selectedCompanyId!, selectedSkillId!),
     enabled: Boolean(selectedCompanyId && selectedSkillId),
   });
+
+  const studioForkDetailQuery = useQuery({
+    queryKey: queryKeys.companySkills.detail(selectedCompanyId ?? "", studioForkFromId ?? ""),
+    queryFn: () => companySkillsApi.detail(selectedCompanyId!, studioForkFromId!),
+    enabled: Boolean(selectedCompanyId && isStudioNew && studioForkFromId),
+  });
+
+  const studioDraft = useMemo(() => {
+    if (!isStudioNew) return buildBlankSkillDraft();
+    if (studioForkFromId) {
+      return studioForkDetailQuery.data ? buildForkSkillDraft(studioForkDetailQuery.data) : buildBlankSkillDraft();
+    }
+    return buildBlankSkillDraft();
+  }, [isStudioNew, studioForkDetailQuery.data, studioForkFromId]);
 
   const updateStatusQuery = useQuery({
     queryKey: queryKeys.companySkills.updateStatus(selectedCompanyId ?? "", selectedSkillId ?? ""),
@@ -3578,11 +3799,7 @@ export function CompanySkills() {
       setSource("");
     },
     onError: (error) => {
-      pushToast({
-        tone: "error",
-        title: "Skill import failed",
-        body: error instanceof Error ? error.message : "Failed to import skill source.",
-      });
+      reportSkillError(error, "Skill import failed", "Failed to import skill source.", "Importing skills");
     },
   });
 
@@ -3617,11 +3834,27 @@ export function CompanySkills() {
     },
     onError: (error) => {
       setScanStatusMessage(null);
+      reportSkillError(error, "Project skill scan failed", "Failed to scan project workspaces.", "Scanning projects for skills");
+    },
+  });
+
+
+  const createSkill = useMutation({
+    mutationFn: (payload: CompanySkillCreateRequest) => companySkillsApi.create(selectedCompanyId!, payload),
+    onSuccess: async (skill) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) });
+      navigate(routeForSkill(skill));
+      setCreateError(null);
       pushToast({
-        tone: "error",
-        title: "Project skill scan failed",
-        body: error instanceof Error ? error.message : "Failed to scan project workspaces.",
+        tone: "success",
+        title: skill.forkedFromSkillId ? "Skill fork created" : "Skill created",
+        body: `${skill.name} is now editable in the Paperclip workspace.`,
       });
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "Failed to create skill.";
+      setCreateError(message);
+      reportSkillError(error, "Skill creation failed", "Failed to create skill.", "Creating a skill");
     },
   });
 
@@ -3722,11 +3955,7 @@ export function CompanySkills() {
       });
     },
     onError: (error) => {
-      pushToast({
-        tone: "error",
-        title: "Update failed",
-        body: error instanceof Error ? error.message : "Failed to install skill update.",
-      });
+      reportSkillError(error, "Update failed", "Failed to install skill update.", "Updating this skill");
     },
   });
 
@@ -3862,6 +4091,9 @@ export function CompanySkills() {
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Failed to install catalog skill.";
       setInstallDialogState((current) => ({ ...current, error: message }));
+      // Also surface explicit-policy / platform denials in the persistent banner
+      // so the reason stays visible after the dialog closes.
+      policyDenial.capture(error, "Installing this skill");
     },
   });
 
@@ -3984,11 +4216,7 @@ export function CompanySkills() {
       });
     },
     onError: (error) => {
-      pushToast({
-        tone: "error",
-        title: "Remove failed",
-        body: error instanceof Error ? error.message : "Failed to remove skill.",
-      });
+      reportSkillError(error, "Remove failed", "Failed to remove skill.", "Removing this skill");
     },
   });
 
@@ -4030,9 +4258,19 @@ export function CompanySkills() {
   const catalogSourceForDetail = activeDetail
     ? (catalogListQuery.data ?? []).find((entry) => entry.key === activeDetail.key)?.source ?? null
     : null;
+  const studioBackHref = studioForkDetailQuery.data ? routeForSkill(studioForkDetailQuery.data) : "/skills";
+  const studioTitle = studioForkFromId ? "Fork skill" : "Create a new skill";
+  const studioDescription = studioForkFromId
+    ? "Review the fork metadata and create an editable company copy."
+    : "Create an editable company skill in the Paperclip workspace.";
 
   return (
     <>
+      {policyDenial.denial ? (
+        <div className="px-4 pt-4">
+          <SkillPolicyDenialNotice denial={policyDenial.denial} onDismiss={policyDenial.reset} />
+        </div>
+      ) : null}
       <Dialog open={deleteOpen} onOpenChange={closeDeleteDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -4193,7 +4431,38 @@ export function CompanySkills() {
         </DialogContent>
       </Dialog>
 
-      {isDiscovery ? (
+      {isStudioNew ? (
+        <div className="min-h-(--sz-calc-30)">
+          <div className="border-b border-border px-4 py-5">
+            <Link
+              to={studioBackHref}
+              className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground no-underline transition-colors hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Back
+            </Link>
+            <h1 className="text-2xl font-semibold">{studioTitle}</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{studioDescription}</p>
+          </div>
+          <div className="px-4 py-4">
+            <div className="max-w-3xl">
+              {studioForkFromId && studioForkDetailQuery.isLoading ? (
+                <PageSkeleton variant="detail" />
+              ) : studioForkFromId && !studioForkDetailQuery.data ? (
+                <EmptyState icon={Boxes} message="Fork source skill not found." />
+              ) : (
+                <NewSkillWizard
+                  initialDraft={studioDraft}
+                  onCreate={(payload) => createSkill.mutate(payload)}
+                  isPending={createSkill.isPending}
+                  error={createError}
+                  onCancel={() => navigate(studioBackHref)}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : isDiscovery ? (
         <DiscoveryGrid
           tab={discoveryTab}
           tabCounts={discoveryTabCounts}

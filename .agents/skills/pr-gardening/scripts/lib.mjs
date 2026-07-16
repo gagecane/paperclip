@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 export const GREEN_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 export const GREEN_STATUS_STATES = new Set(["SUCCESS"]);
 export const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
+const GH_JSON_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 
 export function parseArgs(argv, defaults = {}) {
   const args = { ...defaults };
@@ -33,8 +34,22 @@ export function writeJson(path, value) {
 }
 
 export function ghJson(args) {
-  const output = execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
-  return JSON.parse(output);
+  try {
+    const output = execFileSync("gh", args, {
+      encoding: "utf8",
+      maxBuffer: GH_JSON_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return JSON.parse(output);
+  } catch (error) {
+    if (error?.stderr) process.stderr.write(error.stderr);
+    throw error;
+  }
+}
+
+export function isMissingPullRequestError(error) {
+  const detail = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  return /Could not resolve to a PullRequest|HTTP 404|Not Found/i.test(detail);
 }
 
 export function normalizeRepository(value) {
